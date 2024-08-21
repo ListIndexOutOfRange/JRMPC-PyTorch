@@ -1,6 +1,6 @@
 from __future__ import annotations
 from tqdm.auto import tqdm
-from typing import Sequence, Optional, cast
+from typing import Sequence, Optional, NamedTuple, cast
 import torch
 from torch import Tensor
 
@@ -20,20 +20,27 @@ def initialize_cluster_centers(V: Sequence[Tensor]) -> Tensor:
     return Xin
 
 
+class Outputs(NamedTuple):
+    R: Tensor
+    t: Tensor
+    X: Optional[Tensor] = None
+    history: Optional[dict[str, list[Tensor]]] = None
+
+
 def jrmpc(
     V: Sequence[Tensor],
     X: Optional[Tensor] = None,
     R: Optional[Tensor] = None,
     t: Optional[Tensor] = None,
     S: Optional[Tensor] = None,
-    max_num_iter: int = 100,
+    Q_factor: Optional[float] = 1000,
+    max_num_iter: int = 20,
     epsilon: float = 1e-6,
     initial_priors: Optional[Tensor] = None,
     gamma: Optional[float] = None,
     update_priors: bool = False,
-    track_history: bool = False,
     progress_bar: bool = False,
-) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, dict[str, list[Tensor]]]:
+) -> Outputs:
     """ JRMPC defaults arguments.
 
     Args:
@@ -49,8 +56,10 @@ def jrmpc(
             If scalar is provided then all K components are initialized with the same variance.
             If None, all variances are initialized with the same value, which is computed as the squared length of
             the diagonal of the bounding box that contains all points of V, after applying initial rototranslation.
+        Q_factor (float, optional):
+            After having computed Q (=1/S), it is multiplied by this factor. Default value: 1000.
         max_num_iter (Optional[int]):
-            Specifies the number of iterations, Default value: 100.
+            Specifies the number of iterations, Default value: 20.
         epsilon (Optional[Tensor]):
             Artificial covariance flatten. A positive number added to S, after its update, at every iteration.
             Default value: 1e-6.
@@ -71,9 +80,6 @@ def jrmpc(
             It is a flag that controls the update of p across iterations. The algorithm expects a scalar.
             If it is (numeric) 0 then p is kept fixed otherwise priors are updated at every iteration.
             Default value: False.
-        track_history (bool, optional):
-            If True, keep track of the estimated transformation after each optimization step, and return the
-            history. Default value: False.
         progress_bar (bool, optional):
             If True, display a progress bar during the `max_num_iter` optimization steps.
             Default value: False.
@@ -106,7 +112,7 @@ def jrmpc(
         S = sqe(min_xyz.unsqueeze(1), max_xyz.unsqueeze(1)).squeeze().repeat(K)
     S = cast(Tensor, S)
     Q = 1 / S
-    Q *= 1000  # It seems to work a lot better ...
+    Q *= Q_factor
     pk = None
     if gamma is not None:
         pk = torch.tensor(1 / (K * (gamma + 1))).repeat(K)
@@ -125,8 +131,7 @@ def jrmpc(
     h = 2 / Q.mean()
     beta = gamma / (h * (gamma + 1))
     # Optim _________________________________________________________________________________________________
-    if track_history:
-        history = dict(R=list(), t=list())
+    history = dict(R=list(), t=list())
     iterable = tqdm(range(max_num_iter)) if progress_bar else range(max_num_iter)
     for _ in iterable:
         A = [sqe(tv, X) for tv in TV]  # (M, Nj, K)
@@ -158,11 +163,7 @@ def jrmpc(
         Q = 3 * denominator / (wnormes.sum(dim=0) + 3 * denominator * epsilon)  # (K,)
         if update_priors:
             pk = denominator / ((gamma + 1) * denominator.sum())
-        if track_history:
-            history['R'].append(R.cpu())
-            history['t'].append(t.cpu())
-    if track_history:
-        history['R'] = torch.stack(history['R'])  # type: ignore
-        history['t'] = torch.stack(history['t'])  # type: ignore
+        history['R'].append(R.cpu())
+        history['t'].append(t.cpu())
     t = t.unsqueeze(-1)
-    return (R, t, history) if track_history else (R, t)
+    return Outputs(R, t, X, history)

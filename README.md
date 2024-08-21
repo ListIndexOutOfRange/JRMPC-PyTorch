@@ -29,7 +29,8 @@ In the simplest setup, the following code is enough:
 ```python
 from jrmpc import jrmpc
 V: list[Tensor] = load_views(...)  # list of M tensor (3, Nj).
-R_hat, t_hat = jrmpc(V)  # R_hat is a tensor rotation (M, 3, 3) and t_hat is a tensor of translation (M, 3, 1).
+result = jrmpc(V)
+R_hat, t_hat = result.R, result.t
 V_registered = [r @ v + t for v, r, t in zip(views, R_hat, t_hat)]
 ```
 
@@ -39,43 +40,53 @@ I provide a small [demo notebook](demo.ipynb) with some visualizations.
 
 Here is the complete API description:
 
-- **V** (`Sequence[Tensor]`): Views, sequence of M point clouds of varying length (3, Nj), j=0:M.
-- **X** (`Optional[Tensor]`): Cluster centers. If None, computed internally.
+
+### Parameters
+
+- **V** (`Sequence[Tensor]`): Views, sequence of $M$ point clouds of varying length `(3, Nj), j=0:M`.
+- **X** (`Optional[Tensor]`): Cluster centers. If `None`, computed internally.
 - **R** (`Optional[Tensor]`):
-    Initial rotations (M, 3, 3). If None, initialized with the identity matrix.
+    Initial rotations `(M, 3, 3)`. If `None`, initialized with the identity matrix.
 - **t** (`Optional[Tensor]`):
-    Initial translations (M, 3). If None, t[j] is initialized with the arithmetic mean of V[j],
-    i.e. as a centering operation (typically with V[j] of shape (3, N), t[j] is V[j].mean(dim=1)).
+    Initial translations `(M, 3)`. If None, `t[j]` is initialized with the arithmetic mean of `V[j]`,
+    i.e. as a centering operation.
 - **S** (`Optional[Tensor]`):
-    Initial variances for the K GMM components. Either a tensor (K,) or a single scalar.
-    If scalar is provided then all K components are initialized with the same variance.
-    If None, all variances are initialized with the same value, which is computed as the squared length of
-    the diagonal of the bounding box that contains all points of V, after applying initial rototranslation.
+    Initial variances for the `K` GMM components. Either a tensor `(K,)` or a single scalar.
+    If scalar is provided then all `K` components are initialized with the same variance.
+    If `None`, all variances are initialized with the same value, which is computed as the squared length of
+    the diagonal of the bounding box that contains all points of `V`, after applying initial rototranslation.
+- **Q_factor** (`float, optional`):
+    After having computed `Q` (=`1/S`), it is multiplied by this factor. Default value: `1000`.
 - **max_num_iter** (`Optional[int]`):
-    Specifies the number of iterations, Default value: 100.
+    Specifies the number of iterations, Default value: `100`.
 - **epsilon** (`Optional[Tensor]`):
-    Artificial covariance flatten. A positive number added to S, after its update, at every iteration.
-    Default value: 1e-6.
+    Artificial covariance flatten. A positive number added to `S`, after its update, at every iteration.
+    Default value: `1e-6`.
 - **initial_priors** (`Optional[Tensor]`):
-    Specifies the prior probabilities p of the GMM components, and implicitly defines the prior p_{K+1}
-    for the outlier class. It can be a (K,) tensor or a scalar. If p is scalar then that same value is
-    used for all components. The sum of all elements in p (or K*p if p is scalar), must be less than 1
-    as they represent a probability mass. p_{K+1} is computed internally as 1 - sum(p) if p is a vector,
-    or as p_{K+1} = 1-K\*p otherwise. gamma is uniquely defined from p_{K+1} as 1 = (gamma+1)*sum(p).
-    Default value: The distribution of p_k is initialized as a uniform as p_k = 1/(K+1), k=0:K.
+    Specifies the prior probabilities `p` of the GMM components, and implicitly defines the prior `p_{K+1}`
+    for the outlier class. It can be a `(K,)` tensor or a scalar. If `p` is scalar then that same value is
+    used for all components. The sum of all elements in `p` (or `K*p` if p is scalar) must be less than `1`
+    as they represent a probability mass. `p_{K+1}` is computed internally as `1 - sum(p)` if p is a vector,
+    or as `p_{K+1}` = `1-K\&ast;p` otherwise. gamma is uniquely defined from `p_{K+1}` as `1 = (gamma+1)&ast;sum(p)`.
+    Default value: The distribution of `p_k` is initialized as a uniform as `p_k = 1/(K+1), k=0:K`.
 - **gamma** (`Optional[float]`):
-    Positive scalar specifying the outlier proportion in V. Used to compute the prior probability
-    p_{K+1} of the outlier component as gamma*sum_k(p_k). If gamma is provided then pk's are
-    initialized uniformly as sum_k(p_k) = 1/(gamma+1) => p_k = 1/(K*(gamma+1)). Paramater gamma is a
-    shortcut to set initialPriors uniformly, and therefore, either  'gamma' or 'initialPriors'
-    should be given at a time. Default value: 1/K.
+    Positive scalar specifying the outlier proportion in `V`. Used to compute the prior probability
+    `p_{K+1}` of the outlier component as `gamma*sum_k(p_k)`. If gamma is provided then `pk's` are
+    initialized uniformly as `sum_k(p_k) = 1/(gamma+1)` => `p_k = 1/(K*(gamma+1))`. Paramater gamma is a
+    shortcut to set `initial_priors` uniformly, and therefore, either  `gamma` or `initialPriors`
+    should be given at a time. Default value: `1/K`.
 - **update_priors** (`bool, optional`):
-    It is a flag that controls the update of p across iterations. The algorithm expects a scalar.
-    If it is (numeric) 0 then p is kept fixed otherwise priors are updated at every iteration.
-    Default value: False.
-- **track_history** (`bool, optional`):
-    If True, keep track of the estimated transformation after each optimization step, and return the
-    history. Default value: False.
+    If True, priors are updated at every iteration.
+    Default value: `False`.
 - **progress_bar** (`bool, optional`):
-    If True, display a progress bar during the `max_num_iter` optimization steps.
-    Default value: False.
+    If `True`, display a progress bar during the `max_num_iter` optimization steps.
+    Default value: `False`.
+
+### Returns
+
+A named tuple with four elements:
+1. R: estimated rotation matrices to align the given views onto the estimated template. Tensor `(M, 3, 3)`.
+2. t: estimated translation vector to align the given views onto the estimated template. Tensor `(M, 3, 1)`.
+3. X: estimated template. Point clouds `(M, K)`.
+4. history: the transformation parameters after each iteration. Dictionary with keys `R` and `t`. 
+history['R'] and history['t'] are list of length `max_num_iter` of rotation and translation tensors. 
