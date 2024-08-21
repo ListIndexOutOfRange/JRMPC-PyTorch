@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jrmpc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
   "torch",
   "tqdm",
@@ -26,3 +26,8 @@ classifiers = [
 
 [project.urls]
 Repository = "https://github.com/ListIndexOutOfRange/JRMPC-PyTorch"
+
+
+# python3 -m build
+# twine check dist/*
+# twine upload dist/*
