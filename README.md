@@ -1,5 +1,7 @@
 # JRMPC PyTorch
 
+JRMPC (Joint Registration of Multiple Point Clouds) is an algorith to jointly estimate rigid transformation aligning a set of point clouds of varying lengths.
+
 ## Installation
 
 `pip install jrmpc`
@@ -8,13 +10,13 @@
 
 This repos is a PyTorch portage of the JRMPC algorithm.
 
-The two reference papers re:     
+The two reference papers are:     
 - [*Georgios D. Evangelidis, D. Kounades-Bastian, R. Horaud, and E.Z Psarakis,
 A Generative Model for the Joint Registration of Multiple Point Sets, ECCV, 2014.*](https://hal.science/hal-01019661v3)
 - [*Georgios D. Evangelidis, R. Horaud,
 Joint Alignment of Point Sets with Batch and Incremental Expectation-Maximization, PAMI, 2018.*](https://inria.hal.science/hal-01413414/file/EvangelidisHoraud-final.pdf)
 
-The code provided by the authors is downloadable through [this link](https://team.inria.fr/perception/files/2015/05/JRMPC_v0.9.4.zip).
+The original code provided by the authors is downloadable through [this link](https://team.inria.fr/perception/files/2015/05/JRMPC_v0.9.4.zip).
 
 
 ## Motivation
@@ -24,11 +26,10 @@ Leveraging PyTorch allows this implementation to support CUDA GPU. From my quick
 
 ## Getting started
 
-JRMPC is an algorith to jointly estimate rigid transformation aligning a set of point clouds of varying lengths.
 In the simplest setup, the following code is enough:
 ```python
 from jrmpc import jrmpc
-V: list[Tensor] = load_views(...)  # list of M tensor (3, Nj).
+V: list[Tensor] = load_views(...)  # list of M tensors (3, Nj).
 result = jrmpc(V)
 R_hat, t_hat = result.R, result.t
 V_registered = [r @ v + t for v, r, t in zip(views, R_hat, t_hat)]
@@ -89,4 +90,4 @@ A named tuple with four elements:
 2. t: estimated translation vector to align the given views onto the estimated template. Tensor `(M, 3, 1)`.
 3. X: estimated template. Point clouds `(M, K)`.
 4. history: the transformation parameters after each iteration. Dictionary with keys `R` and `t`. 
-history['R'] and history['t'] are list of length `max_num_iter` of rotation and translation tensors. 
+`history['R']` and `history['t']` are list of length `max_num_iter` of rotation and translation tensors. 
