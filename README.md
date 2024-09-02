@@ -1,4 +1,4 @@
-# JRMPC PyTorch
+# JRMPC Numpy/PyTorch
 
 JRMPC (Joint Registration of Multiple Point Clouds) is an algorith to jointly estimate rigid transformation aligning a set of point clouds of varying lengths.
 
@@ -8,7 +8,7 @@ JRMPC (Joint Registration of Multiple Point Clouds) is an algorith to jointly es
 
 ## Presentation
 
-This repos is a PyTorch portage of the JRMPC algorithm.
+This repos is a Numpy and PyTorch portage of the JRMPC algorithm.
 
 The two reference papers are:     
 - [*Georgios D. Evangelidis, D. Kounades-Bastian, R. Horaud, and E.Z Psarakis,
@@ -21,6 +21,7 @@ The original code provided by the authors is downloadable through [this link](ht
 
 ## Motivation
 
+Python is widely used in the machine learning community, far more than MATLAB.  
 Leveraging PyTorch allows this implementation to support CUDA GPU. From my quick testing, **it is approximately 50x faster than the base Matlab implementation**.
 
 
@@ -36,6 +37,17 @@ V_registered = [r @ v + t for v, r, t in zip(views, R_hat, t_hat)]
 ```
 
 I provide a small [demo notebook](demo.ipynb) with some visualizations. 
+
+
+## Multi-backend support
+
+If you run `import jrmpc from jrmpc`, it will attempt to automatically choose a backend: `torch` if available, else `numpy`.      
+If you want to manually choose a backend, run one of the following:
+```python
+from jrmpc.torch import jrmpc
+from jrmpc.numpy import jrmpc
+```
+
 
 ## Documentation
 
