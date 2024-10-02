@@ -22,7 +22,8 @@ The original code provided by the authors is downloadable through [this link](ht
 ## Motivation
 
 Python is widely used in the machine learning community, far more than MATLAB.  
-Leveraging PyTorch allows this implementation to support CUDA GPU. From my quick testing, **it is approximately 50x faster than the base Matlab implementation**.
+Leveraging PyTorch allows this implementation to support CUDA GPU. From my quick testing on a single RTX 3090,
+**it is approximately 50x faster than the base Matlab implementation**.
 
 
 ## Getting started
@@ -68,6 +69,9 @@ Here is the complete API description:
     If scalar is provided then all `K` components are initialized with the same variance.
     If `None`, all variances are initialized with the same value, which is computed as the squared length of
     the diagonal of the bounding box that contains all points of `V`, after applying initial rototranslation.
+- **fix_model** (bool):
+    If `True`, the model `X` onto which the views `V` are registered is not updated during optimization. Only
+    rotations and translations are estimated. Default value: `False`.
 - **Q_factor** (`float, optional`):
     After having computed `Q` (=`1/S`), it is multiplied by this factor. Default value: `1000`.
 - **max_num_iter** (`Optional[int]`):
@@ -101,5 +105,16 @@ A named tuple with four elements:
 1. R: estimated rotation matrices to align the given views onto the estimated template. Tensor `(M, 3, 3)`.
 2. t: estimated translation vector to align the given views onto the estimated template. Tensor `(M, 3, 1)`.
 3. X: estimated template. Point clouds `(M, K)`.
-4. history: the transformation parameters after each iteration. Dictionary with keys `R` and `t`. 
+4. S: Scalar variance associated to each of the estimated template `K` Gaussians. Tensor `(K,)`.
+5. A: Aij in R^K: posterior probability of the j-th point of the i-th view to be associated with K clusters.
+    List of M Tensors (N_i, K).
+6. p: Priors probabilities, not including outliers. Tensor `(K + 1)`.
+7. history: the transformation parameters after each iteration. Dictionary with keys `R` and `t`. 
 `history['R']` and `history['t']` are list of length `max_num_iter` of rotation and translation tensors. 
+
+
+## Bonus: Fast non-generative pairwise registration
+
+In some cases, a model is available, and many views must be registered *independently* onto it. The torch function
+`jrmpc.parallel_jrmpc_single_view_fixed_model` provides a fast way to do this.
+It accepts a batch of views `(B, 3, N)` and a single model `(3, K)`.

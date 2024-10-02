@@ -23,8 +23,11 @@ def initialize_cluster_centers(V: Sequence[Tensor]) -> Tensor:
 class Outputs(NamedTuple):
     R: Tensor
     t: Tensor
-    X: Optional[Tensor] = None
-    history: Optional[dict[str, list[Tensor]]] = None
+    X: Tensor
+    S: Tensor
+    A: list[Tensor]
+    p: Tensor
+    history: dict[str, list[Tensor]]
 
 
 def jrmpc(
@@ -33,6 +36,7 @@ def jrmpc(
     R: Optional[Tensor] = None,
     t: Optional[Tensor] = None,
     S: Optional[Tensor] = None,
+    fix_model: bool = False,
     Q_factor: Optional[float] = 1000,
     max_num_iter: int = 20,
     epsilon: float = 1e-6,
@@ -56,6 +60,9 @@ def jrmpc(
             If scalar is provided then all K components are initialized with the same variance.
             If None, all variances are initialized with the same value, which is computed as the squared length of
             the diagonal of the bounding box that contains all points of V, after applying initial rototranslation.
+        fix_model (bool):
+            If True, the model X onto which the views V are registered is not updated during optimization. Only
+            rotations and translations are estimated. Default value: False.
         Q_factor (float, optional):
             After having computed Q (=1/S), it is multiplied by this factor. Default value: 1000.
         max_num_iter (Optional[int]):
@@ -73,7 +80,7 @@ def jrmpc(
         gamma (Optional[float]):
             Positive scalar specifying the outlier proportion in V. Used to compute the prior probability
             p_{K+1} of the outlier component as gamma*sum_k(p_k). If gamma is provided then pk's are
-            initialized uniformly as sum_k(p_k) = 1/(gamma+1) => p_k = 1/(K*(gamma+1)). Paramater gamma is a
+            initialized uniformly as sum_k(p_k) = 1/(gamma+1) => p_k = 1/(K*(gamma+1)). Parameter gamma is a
             shortcut to set initialPriors uniformly, and therefore, either  'gamma' or 'initialPriors'
             should be given at a time. Default value: 1/K.
         update_priors (bool, optional):
@@ -115,7 +122,7 @@ def jrmpc(
     Q *= Q_factor
     pk = None
     if gamma is not None:
-        pk = torch.tensor(1 / (K * (gamma + 1))).repeat(K)
+        pk = torch.tensor(1 / (K * (gamma + 1)), device=X.device).repeat(K)
     if initial_priors is not None:
         # if we reach this code, gamma is None and initial_priors is not None
         if isinstance(initial_priors, float):
@@ -134,6 +141,8 @@ def jrmpc(
     history = dict(R=list(), t=list())
     iterable = tqdm(range(max_num_iter)) if progress_bar else range(max_num_iter)
     for _ in iterable:
+        # Aij in R^K:
+        #   posterior probability of the j-th point of the i-th view to be associated with K clusters
         A = [sqe(tv, X) for tv in TV]  # (M, Nj, K)
         A = [(pk * (Q ** 1.5))[None, :] * torch.exp(-0.5 * Q[None, :] * a) for a in A]  # (M, Nj, K)
         A = [a / (a.sum(dim=1)[:, None] + beta) for a in A]  # (M, Nj, K)
@@ -157,13 +166,90 @@ def jrmpc(
         t = (mX - (R @ mW[..., None]).squeeze()) / sum_of_weights
         # UPDATE
         TV = [R[j] @ V[j] + t[j][:, None] for j in range(M)]
-        denominator = Lambda.sum(dim=0)  # (M, K) -> (K,)
-        X = torch.stack([tv @ a for tv, a in zip(TV, A)]).sum(dim=0) / denominator[None, :]
-        wnormes = torch.stack([(a * sqe(tv, X)).sum(dim=0) for a, tv in zip(A, TV)])  # (M, K)
-        Q = 3 * denominator / (wnormes.sum(dim=0) + 3 * denominator * epsilon)  # (K,)
-        if update_priors:
-            pk = denominator / ((gamma + 1) * denominator.sum())
+        if not fix_model:
+            denominator = Lambda.sum(dim=0)  # (M, K) -> (K,)
+            X = torch.stack([tv @ a for tv, a in zip(TV, A)]).sum(dim=0) / denominator[None, :]
+            wnormes = torch.stack([(a * sqe(tv, X)).sum(dim=0) for a, tv in zip(A, TV)])  # (M, K)
+            # Q is the inverse covariances matrix
+            Q = 3 * denominator / (wnormes.sum(dim=0) + 3 * denominator * epsilon)  # (K,)
+            if update_priors:
+                pk = denominator / ((gamma + 1) * denominator.sum())
         history['R'].append(R.cpu())
         history['t'].append(t.cpu())
     t = t.unsqueeze(-1)
-    return Outputs(R, t, X, history)
+    return Outputs(R, t, X, 1 / Q, A, pk, history)
+
+
+
+def jrmpc_single_view_fixed_model(
+    V: Tensor,
+    X: Tensor,
+    Q_factor: float = 1000,
+    max_num_iter: int = 20,
+    gamma: float | None = None,
+) -> tuple[Tensor, Tensor]:
+    """ V is single view (3, N). 
+        Model is (3, K).
+    """
+    sqe = lambda Y, X: ((Y.T[:, None, :] - X.T[None, :, :]) ** 2).sum(dim=2)
+    # Input checks __________________________________________________________________________________________
+    dim, K = V.shape
+    assert dim == 3, 'V must be a 3 x N matrix.'
+    dim, K = X.shape
+    assert dim == 3, 'X must be a 3 x K matrix.'
+    R = torch.eye(3, device=X.device, dtype=X.dtype)  # (3, 3)
+    # Init __________________________________________________________________________________________________
+    t = - V.mean(dim=1) + X.mean(dim=1)
+    TV = R @ V + t[:, None]
+    # # variance from bbox
+    pointclouds = torch.hstack((TV, X))
+    min_xyz = torch.stack([coord.min() for coord in pointclouds])
+    max_xyz = torch.stack([coord.max() for coord in pointclouds])
+    S = sqe(min_xyz.unsqueeze(1), max_xyz.unsqueeze(1)).squeeze().repeat(K)
+    S = cast(Tensor, S)
+    Q = 1 / S
+    Q *= Q_factor
+    if gamma is not None:
+        pk = torch.tensor(1 / (K * (gamma + 1)), device=X.device).repeat(K)
+    else:
+        gamma = 1 / K
+        pk = torch.tensor(1 / (K + 1), device=X.device).repeat(K)
+    gamma = cast(float, gamma)  # at this point, gamma cannot be None anymore.
+    h = 2 / Q.mean()
+    beta = gamma / (h * (gamma + 1))
+    # # Optim _________________________________________________________________________________________________
+    # # history = dict(R=list(), t=list())
+    for _ in range(max_num_iter):
+        # Aij in R^K:
+        #   posterior probability of the j-th point of the i-th view to be associated with K clusters
+        A = sqe(TV, X)  # (Nj, K)
+        A = (pk * (Q ** 1.5))[None, :] * torch.exp(-0.5 * Q[None, :] * A)  # (Nj, K)
+        A = A / (A.sum(dim=1)[:, None] + beta)  # (Nj, K)
+        # Weighted Umeyama
+        Lambda = A.sum(dim=0)  # (K)
+        W = V @ A * Q          # (3, K)
+        b = Lambda * Q         # (K)
+        mW = W.sum(dim=1)      # (3, K) -> (3)
+        mX = X @ b             # (3)
+        sum_of_weights = Lambda @ Q  # (K) @ (K) -> (1)
+        # P is: (3, K) @ (K, 3) - (3, 1) @ (1, 3) / (1,) -> (3, 3)
+        P = X @ W.T - mX[:, None] @ mW[None, :] / sum_of_weights
+        # SVD
+        svd_results = torch.linalg.svd(P)
+        UU, VV = svd_results.U, svd_results.Vh.T
+        UU, VV = cast(Tensor, UU), cast(Tensor, VV)
+        SS = torch.eye(3, device=UU.device, dtype=X.dtype)
+        # We do these weird steps instead of SS[2,2] = det(...) in order to be able to vmap this function.
+        d = torch.det(VV @ UU.T) - 1  # minus 1 because we add to identity matrix
+        d = torch.hstack((torch.tensor((0, 0), device=SS.device), d))
+        d = torch.diag(d)
+        SS = SS + d
+        R = (VV @ SS @ UU.T).T
+        t = (mX - (R @ mW)) / sum_of_weights
+        # UPDATE
+        TV = R @ V + t[:, None]
+    t = t.unsqueeze(-1)
+    return R, t
+
+
+parallel_jrmpc_single_view_fixed_model = torch.vmap(jrmpc_single_view_fixed_model, in_dims=(0, None))
